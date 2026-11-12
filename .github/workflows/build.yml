@@ -1,0 +1,63 @@
+name: Build and Release MediaHub-StreamStudio
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build Executable with PyInstaller Spec
+        run: pyinstaller StreamStudio.spec
+
+      - name: Compress Build to ZIP
+        run: |
+          Compress-Archive -Path "dist\StreamStudio\*" -DestinationPath "MediaHub-StreamStudio.zip" -Force
+
+      - name: Generate Release Tag Name
+        id: tag_name
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            echo "TAG=${{ github.event.release.tag_name }}" >> $env:GITHUB_OUTPUT
+          } elseif ("${{ github.ref }}" -match "refs/tags/") {
+            echo "TAG=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          } else {
+            $date = Get-Date -Format "yyyyMMdd-HHmm"
+            echo "TAG=v1.0.0-$date" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Publish Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_name.outputs.TAG }}
+          name: "MediaHub-StreamStudio ${{ steps.tag_name.outputs.TAG }}"
+          files: MediaHub-StreamStudio.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
