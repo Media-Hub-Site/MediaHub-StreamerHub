@@ -824,18 +824,46 @@ class Avatar(QWidget):
         self.setFixedSize(size, size)
         self._text = "S"
         self._color = QColor(T.PURPLE)
+        self._pixmap: QPixmap | None = None
 
     def set_name(self, name: str):
         self._text = (name[:1] or "S").upper()
         self._color = QColor.fromHsv((sum(map(ord, name or "S")) * 37) % 360, 150, 235)
         self.update()
 
+    def set_image_bytes(self, raw_bytes: bytes | None):
+        if raw_bytes:
+            pix = QPixmap()
+            if pix.loadFromData(raw_bytes):
+                self._pixmap = pix
+                self.update()
+                return
+        self._pixmap = None
+        self.update()
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect().adjusted(1, 1, -1, -1))
+        if self._pixmap and not self._pixmap.isNull():
+            path = QPainterPath()
+            path.addEllipse(rect)
+            p.setClipPath(path)
+            scaled = self._pixmap.scaled(
+                self.width(), self.height(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            p.drawPixmap(0, 0, scaled)
+            p.setClipping(False)
+            p.setPen(QPen(QColor(T.PURPLE), 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(rect)
+            return
+
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self._color)
-        p.drawEllipse(self.rect().adjusted(1, 1, -1, -1))
+        p.drawEllipse(rect)
         p.setPen(QColor("white"))
         f = QFont("Segoe UI", int(self.width() * 0.34))
         f.setBold(True)

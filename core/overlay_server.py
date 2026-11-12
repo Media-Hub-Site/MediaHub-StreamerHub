@@ -1,15 +1,16 @@
 """
 core/overlay_server.py
 ──────────────────────
-Servidor HTTP local para OBS Studio Browser Sources (http://127.0.0.1:8899).
-Sirve overlays HTML5 transparentes en tiempo real para Alertas, Voces IA,
-Chat en vivo y Barras de Metas (Seguidores / Suscriptores) sin requerir servicios externos.
+Servidor HTTP local para OBS Studio Browser Sources y Callback OAuth2 de Twitch (http://127.0.0.1:8899).
+Sirve:
+- /overlay, /chat, /goals: Overlays HTML5 transparentes en tiempo real para OBS Studio.
+- /auth/callback y POST /api/auth/token: Recepción automática del token OAuth2 de Twitch desde el navegador.
 """
 
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 
 OVERLAY_HTML = """<!DOCTYPE html>
@@ -56,7 +57,6 @@ OVERLAY_HTML = """<!DOCTYPE html>
     display: inline-block;
   }
 
-  /* Tarjeta de Alerta Principal */
   .alert-stage {
     flex: 1;
     display: flex;
@@ -137,7 +137,6 @@ OVERLAY_HTML = """<!DOCTYPE html>
     100% { height: 22px; opacity: 1; }
   }
 
-  /* Barra de Metas Inferior */
   .goals-bar {
     display: flex;
     gap: 24px;
@@ -376,6 +375,130 @@ CHAT_HTML = """<!DOCTYPE html>
 </html>
 """
 
+AUTH_CALLBACK_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>StreamStudio — Conexión con Twitch</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(circle at top, #1E1B4B 0%, #0D1021 100%);
+    color: #F2F4FA;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: #161929;
+    border: 1px solid #2E3248;
+    border-top: 4px solid #9146FF;
+    border-radius: 16px;
+    max-width: 520px;
+    width: 100%;
+    padding: 32px;
+    text-align: center;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+  }
+  .badge {
+    display: inline-block;
+    background: rgba(145, 70, 255, 0.18);
+    color: #C4B5FD;
+    font-weight: 800;
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 24px; margin-bottom: 10px; }
+  p { color: #8D93AB; font-size: 14px; line-height: 1.5; margin-bottom: 20px; }
+  .status {
+    padding: 14px;
+    border-radius: 10px;
+    background: #232637;
+    font-weight: 700;
+    color: #34D399;
+    margin-bottom: 16px;
+  }
+  input {
+    width: 100%;
+    padding: 11px 14px;
+    border-radius: 8px;
+    border: 1px solid #2E3248;
+    background: #0D1021;
+    color: #F2F4FA;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+  button {
+    background: #9146FF;
+    color: white;
+    border: none;
+    padding: 11px 22px;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+    width: 100%;
+    font-size: 14px;
+  }
+  button:hover { background: #A463FF; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">MEDIAHUB • STREAMSTUDIO</div>
+    <h1 id="title">Vinculando cuenta de Twitch…</h1>
+    <p id="desc">Estamos enviando tu sesión de forma segura a la aplicación de escritorio StreamStudio.</p>
+    <div id="statusBox" class="status">Procesando autorización OAuth 2.0…</div>
+    <div id="manualBox" style="display:none; text-align:left; margin-top:16px;">
+      <p style="margin-bottom:8px;">O pega aquí directamente tu Token OAuth de Twitch para enviarlo a StreamStudio:</p>
+      <input id="tokInput" type="password" placeholder="oauth:xxxxxxxxxxxxxxxxxxxxxx" />
+      <button onclick="sendManual()">Vincular con StreamStudio</button>
+    </div>
+  </div>
+<script>
+  async function sendToken(token) {
+    try {
+      const res = await fetch("/api/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access_token: token })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById("title").textContent = "¡Cuenta de Twitch Conectada!";
+        document.getElementById("desc").textContent = "Tu canal ya está vinculado en tiempo real. Puedes cerrar esta pestaña y volver a StreamStudio.";
+        document.getElementById("statusBox").textContent = "✓ Autenticación completada en StreamStudio";
+        document.getElementById("manualBox").style.display = "none";
+      }
+    } catch (e) {
+      document.getElementById("statusBox").textContent = "Error comunicando con StreamStudio local.";
+    }
+  }
+
+  function sendManual() {
+    const val = document.getElementById("tokInput").value.trim();
+    if (val) sendToken(val);
+  }
+
+  const hash = window.location.hash.substring(1);
+  const params = new URLSearchParams(hash || window.location.search);
+  const tok = params.get("access_token");
+  if (tok) {
+    sendToken(tok);
+  } else {
+    document.getElementById("title").textContent = "Pasarela Local de Twitch OAuth";
+    document.getElementById("statusBox").textContent = "Esperando token de autorización…";
+    document.getElementById("manualBox").style.display = "block";
+  }
+</script>
+</body>
+</html>
+"""
+
 
 class OverlayServer:
     def __init__(self, storage):
@@ -386,6 +509,7 @@ class OverlayServer:
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.is_running = False
+        self.on_oauth_token = None  # Callback: fn(token: str)
 
     def start(self) -> int:
         if self.is_running:
@@ -395,7 +519,7 @@ class OverlayServer:
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                pass  # Silenciar logs de consola
+                pass
 
             def do_GET(self):
                 parsed = urlparse(self.path)
@@ -413,6 +537,12 @@ class OverlayServer:
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     self.wfile.write(CHAT_HTML.encode("utf-8"))
+                elif path == "/auth/callback":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(AUTH_CALLBACK_HTML.encode("utf-8"))
                 elif path == "/api/state":
                     payload = {
                         "overlay": parent.storage.data.get("overlay", {}),
@@ -429,7 +559,27 @@ class OverlayServer:
                     self.send_response(404)
                     self.end_headers()
 
-        # Intentar puerto configurado o buscar uno libre cercano
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/auth/token":
+                    length = int(self.headers.get("Content-Length", "0") or 0)
+                    raw_body = self.rfile.read(length).decode("utf-8", errors="ignore") if length > 0 else "{}"
+                    try:
+                        body = json.loads(raw_body)
+                        tok = body.get("access_token", "").strip()
+                        if tok and callable(parent.on_oauth_token):
+                            parent.on_oauth_token(tok)
+                        resp = json.dumps({"ok": bool(tok)}).encode("utf-8")
+                    except Exception:
+                        resp = json.dumps({"ok": False}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(resp)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
         for candidate_port in range(self.port, self.port + 15):
             try:
                 self._httpd = ThreadingHTTPServer(("127.0.0.1", candidate_port), Handler)

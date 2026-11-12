@@ -1,33 +1,35 @@
 """
 ui/pages.py
 ───────────
-Páginas del dashboard de StreamStudio: Dashboard, Feed de actividad, Overlays OBS,
-Voces IA, Recompensas y Conexión/Analíticas.
-Todas consumen el controlador (ctx = StreamStudioWindow) y se refrescan con ctx.data_changed.
+Páginas del dashboard de StreamStudio:
+- DashboardPage (Tarjetas animadas, Gráfico de actividad, Asistente de canal, Quick Settings reales de Twitch y Simulador)
+- ActivityPage (Feed en tiempo real con animación de entrada y repetición en OBS)
+- OverlaysPage (Browser Sources para OBS, Temas visuales, Vista previa animada y Metas)
+- VoicesPage (Personalidades de Voz IA, Velocidad/Volumen, Moderación SafeStream Guard)
+- RewardsPage (Recompensas de Puntos del Canal con Voz IA)
+- ConnectionPage (Login directo con Twitch OAuth2/Helix, Clave de Transmisión + Sincronización con OBS Studio,
+                  Chat en directo bidireccional y Analíticas)
 """
 
 import csv
+import webbrowser
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea, QLineEdit,
     QComboBox, QSpinBox, QSlider, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFileDialog, QGraphicsOpacityEffect, QSizePolicy,
+    QFileDialog, QGraphicsOpacityEffect,
 )
 
 from . import theme as T
 from .theme import EVENT_STYLE, THEME_TILES
 from .widgets import (
     TabBar, StatCard, ActivityChart, ToggleSwitch, SelectTile, Mascot, AlertPreview,
-    make_button, symbol_font,
+    Avatar, make_button, symbol_font,
 )
 from core.tts_engine import VOICE_PERSONAS
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Utilidades
-# ─────────────────────────────────────────────────────────────────────────────
 
 def parse_ts(evt: dict) -> datetime:
     try:
@@ -79,8 +81,8 @@ class BasePage(QScrollArea):
         self.body = QWidget()
         self.setWidget(self.body)
         self.root = QVBoxLayout(self.body)
-        self.root.setContentsMargins(30, 24, 30, 28)
-        self.root.setSpacing(16)
+        self.root.setContentsMargins(22, 20, 22, 24)
+        self.root.setSpacing(14)
         head = QVBoxLayout()
         head.setSpacing(2)
         t = QLabel(title)
@@ -98,7 +100,7 @@ class BasePage(QScrollArea):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Dashboard
+#  Dashboard (Estilo StreamElements con Quick Settings real de Twitch)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DashboardPage(BasePage):
@@ -109,7 +111,7 @@ class DashboardPage(BasePage):
     ]
 
     def __init__(self, ctx):
-        super().__init__(ctx, "Dashboard", "Resumen en vivo de la actividad de tu canal de Twitch")
+        super().__init__(ctx, "Dashboard", "Resumen en vivo e interacción directa con tu canal de Twitch")
         self.range_key = "today"
         self.metric_idx = 0
 
@@ -120,11 +122,13 @@ class DashboardPage(BasePage):
         ic = QLabel("✦")
         ic.setFont(symbol_font(12, True))
         ic.setStyleSheet(f"color:{T.GREEN};")
-        txt = QLabel("Novedades: <b>Voces IA</b> con 4 personalidades y moderación <b>SafeStream Guard</b> "
-                     "para puntos del canal.")
-        txt.setStyleSheet(f"color:{T.TEXT};")
+        self.banner_lbl = QLabel(
+            "Conexión Real Twitch Helix activa: actualiza el <b>título y juego de tu stream</b>, "
+            "sincroniza tu <b>Clave de Transmisión con OBS</b> y usa comandos <b>!tts</b> en vivo."
+        )
+        self.banner_lbl.setStyleSheet(f"color:{T.TEXT};")
         bl.addWidget(ic)
-        bl.addWidget(txt, 1)
+        bl.addWidget(self.banner_lbl, 1)
         self.root.addWidget(banner)
 
         rbar = QHBoxLayout()
@@ -132,9 +136,9 @@ class DashboardPage(BasePage):
         self.range_tabs.changed.connect(self._range_changed)
         rbar.addWidget(self.range_tabs)
         rbar.addStretch()
-        live = QLabel("● Datos en vivo")
-        live.setStyleSheet(f"color:{T.GREEN}; font-weight:700; font-size:9pt;")
-        rbar.addWidget(live)
+        self.live_lbl = QLabel("● Datos en vivo")
+        self.live_lbl.setStyleSheet(f"color:{T.GREEN}; font-weight:700; font-size:9pt;")
+        rbar.addWidget(self.live_lbl)
         self.root.addLayout(rbar)
 
         grid = QHBoxLayout()
@@ -150,20 +154,46 @@ class DashboardPage(BasePage):
         body = QHBoxLayout()
         body.setSpacing(14)
 
+        left_col = QVBoxLayout()
+        left_col.setSpacing(14)
+
         chart_card, cv = card_frame()
         self.metric_tabs = TabBar([m[1] for m in self.METRICS])
         self.metric_tabs.changed.connect(self._metric_changed)
         cv.addWidget(self.metric_tabs)
         self.chart = ActivityChart()
         cv.addWidget(self.chart, 1)
-        body.addWidget(chart_card, 1)
+        left_col.addWidget(chart_card, 1)
 
+        # Barra de Simulador Rápido debajo del gráfico
+        sim_card, sv = card_frame()
+        sim_row = QHBoxLayout()
+        sim_row.setSpacing(6)
+        st = QLabel("SIMULAR:")
+        st.setStyleSheet(f"color:{T.MUTED}; font-size:8pt; font-weight:800; letter-spacing:1px;")
+        sim_row.addWidget(st)
+        for txt_, key, kind in (
+            ("♥ Follow", "follow", "Ghost"),
+            ("★ Sub", "sub", "Ghost"),
+            ("◆ Bits", "bits", "Ghost"),
+            ("➤ Raid", "raid", "Ghost"),
+            ("♪ Puntos IA", "channel_points", "Purple"),
+        ):
+            b = make_button(txt_, kind)
+            b.clicked.connect(lambda _=False, k=key: ctx.simulate(k))
+            sim_row.addWidget(b)
+        sv.addLayout(sim_row)
+        left_col.addWidget(sim_card)
+
+        body.addLayout(left_col, 1)
+
+        # Columna derecha idéntica a StreamElements: BOT SETTINGS + QUICK SETTINGS
         side = QVBoxLayout()
         side.setSpacing(14)
 
         bot_card, bv = card_frame()
         bv.setSpacing(8)
-        bt = label_muted("ASISTENTE DE CANAL")
+        bt = label_muted("BOT SETTINGS")
         bt.setStyleSheet(f"color:{T.MUTED}; font-size:8pt; font-weight:800; letter-spacing:1px;")
         bv.addWidget(bt)
         self.mascot = Mascot()
@@ -173,50 +203,54 @@ class DashboardPage(BasePage):
         self.bot_text.setWordWrap(True)
         bv.addWidget(self.bot_text)
         row = QHBoxLayout()
-        self.btn_connect = make_button("CONECTAR", "Primary")
+        self.btn_connect = make_button("JOIN CHANNEL", "Primary")
         self.btn_connect.clicked.connect(self._connect_clicked)
-        btn_mute = make_button("SILENCIAR", "White")
+        btn_mute = make_button("MUTE", "White")
         btn_mute.clicked.connect(ctx.tts.stop_current)
         row.addWidget(self.btn_connect)
         row.addWidget(btn_mute)
         bv.addLayout(row)
         side.addWidget(bot_card)
 
-        sim_card, sv = card_frame()
-        st = QLabel("SIMULADOR RÁPIDO")
-        st.setStyleSheet(f"color:{T.MUTED}; font-size:8pt; font-weight:800; letter-spacing:1px;")
-        sv.addWidget(st)
-        hint = QLabel("Prueba cómo se ve y suena una alerta en OBS sin estar en directo.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color:{T.MUTED}; font-size:9pt;")
-        sv.addWidget(hint)
-        g = QGridLayout()
-        g.setSpacing(8)
-        sims = [("♥  Follow", "follow", "Ghost"), ("★  Suscripción", "sub", "Ghost"),
-                ("◆  500 Bits", "bits", "Ghost"), ("➤  Raid x45", "raid", "Ghost")]
-        for i, (txt_, key, kind) in enumerate(sims):
-            b = make_button(txt_, kind)
-            b.clicked.connect(lambda _=False, k=key: ctx.simulate(k))
-            g.addWidget(b, i // 2, i % 2)
-        bp = make_button("♪  Canje de Puntos con Voz IA", "Purple")
-        bp.clicked.connect(lambda: ctx.simulate("channel_points"))
-        g.addWidget(bp, 2, 0, 1, 2)
-        sv.addLayout(g)
-        side.addWidget(sim_card)
+        # Tarjeta QUICK SETTINGS (Edición real de Título del Stream y Juego en Twitch)
+        qs_card, qsv = card_frame()
+        qsv.setSpacing(8)
+        qst = QLabel("QUICK SETTINGS")
+        qst.setStyleSheet(f"color:{T.MUTED}; font-size:8pt; font-weight:800; letter-spacing:1px;")
+        qsv.addWidget(qst)
+
+        tw = ctx.storage.data.get("twitch", {})
+        qsv.addWidget(label_muted("Stream title"))
+        self.inp_qs_title = QLineEdit(tw.get("stream_title", ""))
+        self.inp_qs_title.setPlaceholderText("Edita el título de tu stream…")
+        qsv.addWidget(self.inp_qs_title)
+
+        qsv.addWidget(label_muted("Game title"))
+        self.inp_qs_game = QLineEdit(tw.get("stream_game", ""))
+        self.inp_qs_game.setPlaceholderText("Ej: Just Chatting, Valorant…")
+        qsv.addWidget(self.inp_qs_game)
+
+        qs_btn_row = QHBoxLayout()
+        qs_btn_row.addStretch()
+        self.btn_qs_update = make_button("UPDATE", "Primary")
+        self.btn_qs_update.clicked.connect(self._update_stream_clicked)
+        qs_btn_row.addWidget(self.btn_qs_update)
+        qsv.addLayout(qs_btn_row)
+        side.addWidget(qs_card)
         side.addStretch()
 
         side_w = QWidget()
-        side_w.setFixedWidth(310)
+        side_w.setFixedWidth(286)
         side_w.setLayout(side)
         body.addWidget(side_w)
         self.root.addLayout(body)
         self.root.addStretch(1)
 
         ctx.connection_changed.connect(self._conn_changed)
+        ctx.profile_updated.connect(self._on_profile_updated)
         self._conn_changed(ctx.twitch_connected, ctx.twitch_status)
         self.refresh()
 
-    # ── eventos de UI ─────────────────────────────────────────────────────────
     def _range_changed(self, idx):
         self.range_key = self.RANGES[idx][0]
         self.refresh()
@@ -226,17 +260,38 @@ class DashboardPage(BasePage):
         self.refresh(chart_only=True)
 
     def _connect_clicked(self):
-        self.ctx.go_to_connection()
+        tw = self.ctx.storage.data.get("twitch", {})
+        if tw.get("channel"):
+            self.ctx.connect_twitch(tw["channel"], tw.get("oauth_token", ""))
+        else:
+            self.ctx.go_to_connection()
+
+    def _update_stream_clicked(self):
+        title = self.inp_qs_title.text().strip()
+        game = self.inp_qs_game.text().strip()
+        self.ctx.update_twitch_stream_metadata(title, game)
+
+    def _on_profile_updated(self, snap: dict):
+        if snap.get("stream_title") and not self.inp_qs_title.hasFocus():
+            self.inp_qs_title.setText(snap["stream_title"])
+        if snap.get("stream_game") and not self.inp_qs_game.hasFocus():
+            self.inp_qs_game.setText(snap["stream_game"])
+        if snap.get("followers_total") is not None:
+            self.c_follow.caption.setText(f"Seguidores ({snap['followers_total']:,} en canal)")
+        if snap.get("is_live"):
+            self.live_lbl.setText(f"● EN VIVO ({snap.get('viewer_count', 0)} espectadores)")
+        else:
+            self.live_lbl.setText("● Datos en vivo")
 
     def _conn_changed(self, ok: bool, text: str):
         self.mascot.set_connected(ok)
         if ok:
-            self.bot_text.setText(f"El asistente está <b>conectado</b> a<br>{self.ctx.twitch_status}")
-            self.btn_connect.setText("DESCONECTAR")
+            self.bot_text.setText(f"El bot está <b>activo</b> en tu chat:<br>{self.ctx.twitch_status}")
+            self.btn_connect.setText("PART CHANNEL")
             self.btn_connect.setObjectName("btnDanger")
         else:
-            self.bot_text.setText("El asistente <b>no</b> está en tu chat.")
-            self.btn_connect.setText("CONECTAR")
+            self.bot_text.setText("The bot is currently <b>not</b> in your chat.")
+            self.btn_connect.setText("JOIN CHANNEL")
             self.btn_connect.setObjectName("btnPrimary")
         self.btn_connect.style().unpolish(self.btn_connect)
         self.btn_connect.style().polish(self.btn_connect)
@@ -246,7 +301,6 @@ class DashboardPage(BasePage):
             pass
         self.btn_connect.clicked.connect(self.ctx.disconnect_twitch if ok else self._connect_clicked)
 
-    # ── datos ─────────────────────────────────────────────────────────────────
     def _chart_buckets(self, events, key):
         now = datetime.now()
         sec, fmt = {"hour": (300, "%H:%M"), "today": (7200, "%H:%M"), "all": (86400, "%d/%m")}[self.range_key]
@@ -413,8 +467,6 @@ class ActivityPage(BasePage):
 class OverlaysPage(BasePage):
     def __init__(self, ctx):
         super().__init__(ctx, "Overlays y metas", "Fuentes de navegador para OBS Studio, tema visual y barras de metas.")
-        ov = ctx.storage.data["overlay"]
-
         urls, uv = card_frame("Fuentes de navegador (Browser Source)",
                               "En OBS agrega una fuente «Navegador», pega la URL (1280×720). El fondo es transparente.")
         port = ctx.port
@@ -540,7 +592,6 @@ class OverlaysPage(BasePage):
         self.ctx.autosave()
 
     def refresh(self):
-        # Las metas se actualizan al llegar follows/subs
         ov = self.ctx.storage.data["overlay"]
         for w, k in ((self.spn_fc, "follower_goal_current"), (self.spn_sc, "sub_goal_current")):
             w.blockSignals(True)
@@ -795,39 +846,152 @@ class RewardsPage(BasePage):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Conexión Twitch & Analíticas
+#  Cuenta de Twitch (OAuth 2.0 + Helix API), Clave de Transmisión & Analíticas
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConnectionPage(BasePage):
     def __init__(self, ctx):
-        super().__init__(ctx, "Conexión y analíticas",
-                         "Conecta tu canal de Twitch y revisa las métricas acumuladas.")
+        super().__init__(
+            ctx,
+            "Cuenta Twitch, Clave de Transmisión y Analíticas",
+            "Inicia sesión directo en tu canal de Twitch, sincroniza tu Clave de Transmisión con OBS y chatea en vivo.",
+        )
         tw = ctx.storage.data["twitch"]
-        conn, cv = card_frame("Canal de Twitch",
-                              "Sin token OAuth se conecta en modo lectura (chat, bits, subs, raids y canjes).")
-        r = QHBoxLayout()
+
+        # ── 1. Tarjeta de Login Directo con Twitch (OAuth2 + Helix API) ───────
+        conn, cv = card_frame(
+            "1. Inicio de Sesión Directo con tu Cuenta de Twitch (OAuth 2.0 + Helix API)",
+            "Conecta tu cuenta con Token OAuth o autorización en navegador para editar el título/juego de tu stream, "
+            "cargar tu foto de perfil real, detectar seguidores y enviar mensajes al chat.",
+        )
+
+        # Resumen visual de perfil autenticado
+        prof_row = QHBoxLayout()
+        prof_row.setSpacing(14)
+        self.prof_avatar = Avatar(52)
+        if tw.get("channel"):
+            self.prof_avatar.set_name(tw["channel"])
+        prof_row.addWidget(self.prof_avatar)
+
+        prof_info = QVBoxLayout()
+        prof_info.setSpacing(2)
+        self.lbl_prof_name = QLabel(tw.get("display_name") or tw.get("channel") or "Cuenta no vinculada")
+        self.lbl_prof_name.setStyleSheet("font-size:13pt; font-weight:800;")
+        self.lbl_prof_meta = QLabel("Vincula tu cuenta vía OAuth o navegador.")
+        self.lbl_prof_meta.setWordWrap(True)
+        self.lbl_prof_meta.setStyleSheet(f"color:{T.MUTED}; font-size:9pt;")
+        prof_info.addWidget(self.lbl_prof_name)
+        prof_info.addWidget(self.lbl_prof_meta)
+        prof_row.addLayout(prof_info, 1)
+
+        btn_browser_oauth = make_button("🔗 Login Web", "Purple")
+        btn_browser_oauth.clicked.connect(self._open_browser_oauth)
+        prof_row.addWidget(btn_browser_oauth)
+
+        btn_get_tok = make_button("🔑 Token", "Ghost")
+        btn_get_tok.clicked.connect(lambda: webbrowser.open("https://twitchtokengenerator.com/"))
+        prof_row.addWidget(btn_get_tok)
+
+        self.btn_signout = make_button("Salir", "Danger")
+        self.btn_signout.clicked.connect(self.ctx.logout_twitch)
+        prof_row.addWidget(self.btn_signout)
+        cv.addLayout(prof_row)
+
+        # Formulario de credenciales
+        form = QGridLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+        form.addWidget(label_muted("Canal de Twitch"), 0, 0)
+        form.addWidget(label_muted("Token OAuth (oauth:xxxx)"), 0, 1)
+        form.addWidget(label_muted("Client ID (Autodetectado)"), 0, 2)
+
         self.inp_channel = QLineEdit(tw.get("channel", ""))
-        self.inp_channel.setPlaceholderText("Nombre del canal (ej: tu_canal)")
+        self.inp_channel.setPlaceholderText("ej: tu_canal")
+
         self.inp_token = QLineEdit(tw.get("oauth_token", ""))
         self.inp_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.inp_token.setPlaceholderText("oauth:xxxxxxxx (opcional)")
-        self.btn = make_button("Conectar", "Purple")
-        self.btn.clicked.connect(self._click)
-        r.addWidget(self.inp_channel, 1)
-        r.addWidget(self.inp_token, 1)
-        r.addWidget(self.btn)
-        cv.addLayout(r)
-        r2 = QHBoxLayout()
-        r2.addWidget(label_muted("Conectar automáticamente al abrir"))
-        r2.addStretch()
-        self.sw_auto = ToggleSwitch(bool(tw.get("auto_connect", False)))
-        self.sw_auto.toggled.connect(self._auto)
-        r2.addWidget(self.sw_auto)
-        cv.addLayout(r2)
+        self.inp_token.setPlaceholderText("Pega tu Token OAuth…")
+
+        self.inp_client_id = QLineEdit(tw.get("client_id", ""))
+        self.inp_client_id.setPlaceholderText("Opcional / Autodetectado")
+
+        form.addWidget(self.inp_channel, 1, 0)
+        form.addWidget(self.inp_token, 1, 1)
+        form.addWidget(self.inp_client_id, 1, 2)
+        cv.addLayout(form)
+
+        act_row = QHBoxLayout()
         self.status = QLabel()
-        cv.addWidget(self.status)
+        act_row.addWidget(self.status, 1)
+
+        act_row.addWidget(label_muted("Auto-conectar"))
+        self.sw_auto = ToggleSwitch(bool(tw.get("auto_connect", True)))
+        self.sw_auto.toggled.connect(self._auto)
+        act_row.addWidget(self.sw_auto)
+
+        btn_sync_api = make_button("↻ Sincronizar Twitch", "Ghost")
+        btn_sync_api.clicked.connect(lambda: self.ctx.authenticate_and_sync(
+            self.inp_token.text().strip(),
+            self.inp_client_id.text().strip(),
+            self.inp_channel.text().strip(),
+        ))
+        act_row.addWidget(btn_sync_api)
+
+        self.btn = make_button("Conectar Cuenta", "Primary")
+        self.btn.clicked.connect(self._click)
+        act_row.addWidget(self.btn)
+        cv.addLayout(act_row)
         self.root.addWidget(conn)
 
+        # ── 2. Tarjeta de Clave de Transmisión (Stream Key) & OBS Studio ─────
+        sk_card, skv = card_frame(
+            "2. Clave de Transmisión (Stream Key) y Sincronización Directa con OBS Studio",
+            "Guarda tu clave de transmisión (live_...) o impórtala/sincronízala directamente con el perfil de OBS Studio de tu PC.",
+        )
+        sk_grid = QGridLayout()
+        sk_grid.setHorizontalSpacing(12)
+        sk_grid.setVerticalSpacing(8)
+        sk_grid.addWidget(label_muted("Clave de Transmisión de Twitch (Stream Key)"), 0, 0)
+        sk_grid.addWidget(label_muted("Servidor RTMP de Transmisión"), 0, 1)
+
+        self.inp_stream_key = QLineEdit(tw.get("stream_key", ""))
+        self.inp_stream_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.inp_stream_key.setPlaceholderText("live_xxxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxx")
+        self.inp_stream_key.editingFinished.connect(self._save_stream_key)
+
+        self.inp_rtmp = QLineEdit(tw.get("rtmp_server", "rtmp://live.twitch.tv/app/"))
+        self.inp_rtmp.editingFinished.connect(self._save_stream_key)
+
+        sk_grid.addWidget(self.inp_stream_key, 1, 0)
+        sk_grid.addWidget(self.inp_rtmp, 1, 1)
+        skv.addLayout(sk_grid)
+
+        sk_btns = QHBoxLayout()
+        btn_toggle_sk = make_button("👁 Mostrar", "Ghost")
+        btn_toggle_sk.clicked.connect(self._toggle_stream_key_visibility)
+        sk_btns.addWidget(btn_toggle_sk)
+
+        btn_copy_sk = make_button("Copiar Clave", "Ghost")
+        btn_copy_sk.clicked.connect(self._copy_stream_key)
+        sk_btns.addWidget(btn_copy_sk)
+
+        btn_import_obs = make_button("📥 Importar de OBS", "Ghost")
+        btn_import_obs.clicked.connect(self._import_from_obs)
+        sk_btns.addWidget(btn_import_obs)
+
+        btn_export_obs = make_button("📤 Enviar a OBS Studio", "Primary")
+        btn_export_obs.clicked.connect(self._export_to_obs)
+        sk_btns.addWidget(btn_export_obs)
+
+        btn_twitch_dash = make_button("Panel Twitch ↗", "Ghost")
+        btn_twitch_dash.clicked.connect(lambda: webbrowser.open("https://dashboard.twitch.tv/settings/stream"))
+        sk_btns.addWidget(btn_twitch_dash)
+        sk_btns.addStretch()
+        skv.addLayout(sk_btns)
+        self.root.addWidget(sk_card)
+
+        # ── 3. Panel inferior: Analíticas + Chat en Directo Bidireccional ─────
         split = QHBoxLayout()
         split.setSpacing(14)
         an, av = card_frame()
@@ -846,21 +1010,33 @@ class ConnectionPage(BasePage):
         av.addWidget(self.tbl_an, 1)
         split.addWidget(an, 1)
 
-        chat, chv = card_frame("Chat de Twitch en directo")
+        chat, chv = card_frame("Chat de Twitch en directo (Lectura y Envío)")
         self.tbl_chat = QTableWidget(0, 2)
         self.tbl_chat.setHorizontalHeaderLabels(["Espectador", "Mensaje"])
         self._style_table(self.tbl_chat, 1)
         chv.addWidget(self.tbl_chat, 1)
+
+        send_row = QHBoxLayout()
+        self.inp_chat_msg = QLineEdit()
+        self.inp_chat_msg.setPlaceholderText("Escribe un mensaje real para tu chat de Twitch (o !tts Hola)…")
+        self.inp_chat_msg.returnPressed.connect(self._send_chat)
+        btn_send_chat = make_button("Enviar al Chat", "Purple")
+        btn_send_chat.clicked.connect(self._send_chat)
+        send_row.addWidget(self.inp_chat_msg, 1)
+        send_row.addWidget(btn_send_chat)
+        chv.addLayout(send_row)
+
         split.addWidget(chat, 1)
         self.root.addLayout(split, 1)
 
         ctx.connection_changed.connect(self._conn_changed)
         ctx.chat_received.connect(self._chat)
+        ctx.profile_updated.connect(self._on_profile_updated)
         self._conn_changed(ctx.twitch_connected, ctx.twitch_status)
         self.refresh()
 
     def _style_table(self, tbl: QTableWidget, stretch_col: int):
-        tbl.setMinimumHeight(280)
+        tbl.setMinimumHeight(240)
         tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         tbl.setAlternatingRowColors(True)
@@ -871,18 +1047,102 @@ class ConnectionPage(BasePage):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Stretch if c == stretch_col
                                      else QHeaderView.ResizeMode.ResizeToContents)
 
+    def _open_browser_oauth(self):
+        cid = self.inp_client_id.text().strip() or self.ctx.storage.data["twitch"].get("client_id", "")
+        self.ctx.start_browser_oauth(cid)
+
     def _click(self):
         if self.ctx.twitch_connected:
             self.ctx.disconnect_twitch()
         else:
-            self.ctx.connect_twitch(self.inp_channel.text().strip(), self.inp_token.text().strip())
+            tok = self.inp_token.text().strip()
+            cid = self.inp_client_id.text().strip()
+            ch = self.inp_channel.text().strip()
+            if tok:
+                self.ctx.authenticate_and_sync(tok, cid, ch)
+            else:
+                self.ctx.connect_twitch(ch, "")
 
     def _auto(self, on):
         self.ctx.storage.data["twitch"]["auto_connect"] = on
         self.ctx.autosave()
 
+    def _save_stream_key(self):
+        tw = self.ctx.storage.data["twitch"]
+        tw["stream_key"] = self.inp_stream_key.text().strip()
+        tw["rtmp_server"] = self.inp_rtmp.text().strip() or "rtmp://live.twitch.tv/app/"
+        self.ctx.storage.save()
+
+    def _toggle_stream_key_visibility(self):
+        if self.inp_stream_key.echoMode() == QLineEdit.EchoMode.Password:
+            self.inp_stream_key.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            self.inp_stream_key.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _copy_stream_key(self):
+        val = self.inp_stream_key.text().strip()
+        if not val:
+            self.ctx.toast("No hay clave de transmisión configurada", T.YELLOW)
+            return
+        from PyQt6.QtGui import QGuiApplication
+        cb = QGuiApplication.clipboard()
+        if cb:
+            cb.setText(val)
+        self.ctx.toast("Clave de transmisión copiada al portapapeles", T.ACCENT)
+
+    def _import_from_obs(self):
+        from core.twitch_client import TwitchHelixClient
+        ok, key, server, prof = TwitchHelixClient.import_obs_stream_key()
+        if ok:
+            self.inp_stream_key.setText(key)
+            self.inp_rtmp.setText(server)
+            self._save_stream_key()
+            self.ctx.toast(f"Clave importada desde OBS Studio (Perfil: {prof})", T.GREEN)
+        else:
+            self.ctx.toast("No se encontró una clave guardada en los perfiles de OBS Studio", T.YELLOW)
+
+    def _export_to_obs(self):
+        from core.twitch_client import TwitchHelixClient
+        self._save_stream_key()
+        ok, msg = TwitchHelixClient.export_obs_stream_key(
+            self.inp_stream_key.text().strip(),
+            self.inp_rtmp.text().strip(),
+        )
+        self.ctx.toast(msg, T.GREEN if ok else T.YELLOW)
+
+    def _send_chat(self):
+        txt = self.inp_chat_msg.text().strip()
+        if not txt:
+            return
+        if self.ctx.send_chat_message(txt):
+            self.inp_chat_msg.clear()
+
+    def _on_profile_updated(self, snap: dict):
+        if snap.get("login"):
+            self.inp_channel.setText(snap["login"])
+        if snap.get("client_id"):
+            self.inp_client_id.setText(snap["client_id"])
+        if snap.get("token"):
+            self.inp_token.setText(snap["token"])
+        if snap.get("stream_key"):
+            self.inp_stream_key.setText(snap["stream_key"])
+
+        disp = snap.get("display_name") or snap.get("login") or "Canal conectado"
+        self.prof_avatar.set_name(disp)
+        if snap.get("avatar_bytes"):
+            self.prof_avatar.set_image_bytes(snap["avatar_bytes"])
+
+        btype = (snap.get("broadcaster_type") or "streamer").upper()
+        flw = snap.get("followers_total")
+        flw_txt = f"{flw:,} seguidores" if flw is not None else "Seguidores sincronizados"
+        live_txt = f"EN VIVO ({snap.get('viewer_count', 0)} viewers)" if snap.get("is_live") else "OFFLINE"
+        self.lbl_prof_name.setText(f"{disp}  (@{snap.get('login', '')})")
+        self.lbl_prof_meta.setText(
+            f"ID: {snap.get('user_id', '—')}  •  Rango: {btype}  •  {flw_txt}  •  Estado: {live_txt}"
+        )
+
     def _conn_changed(self, ok: bool, text: str):
-        self.btn.setText("Desconectar" if ok else "Conectar")
+        self.btn.setText("Desconectar" if ok else "Conectar Canal")
         color = T.GREEN if ok else T.YELLOW
         self.status.setText(f"● {text}")
         self.status.setStyleSheet(f"color:{color}; font-weight:700;")
@@ -900,7 +1160,7 @@ class ConnectionPage(BasePage):
         s = self.ctx.storage.get_analytics_summary()
         rows = [
             ("Eventos totales", str(s["total_events"])),
-            ("Nuevos seguidores", str(s["follows"])),
+            ("Nuevos seguidores (sesión)", str(s["follows"])),
             ("Suscripciones", str(s["subs"])),
             ("Bits donados", f"{s['bits_total']:,}"),
             ("Raids", f"{s['raids']} ({s['raiders_total']} espectadores)"),

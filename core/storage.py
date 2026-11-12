@@ -2,8 +2,8 @@
 core/storage.py
 ───────────────
 Almacenamiento persistente local para MediaHub-StreamStudio (~/.mediahub/streamstudio_data.json).
-Guarda configuración de overlays OBS, perfiles de voz IA, recompensas de puntos del canal de Twitch,
-lista negra de moderación (SafeStream Guard) e historial de eventos/analíticas.
+Guarda configuración de cuenta real de Twitch (OAuth, Client ID, Clave de Transmisión, metadatos Helix),
+overlays OBS, perfiles de voz IA, recompensas de puntos del canal e historial de eventos/analíticas.
 """
 
 import os
@@ -14,9 +14,22 @@ from datetime import datetime
 DEFAULT_DATA = {
     "twitch": {
         "channel": "",
+        "display_name": "",
+        "user_id": "",
         "oauth_token": "",
         "client_id": "",
-        "auto_connect": False,
+        "stream_key": "",
+        "rtmp_server": "rtmp://live.twitch.tv/app/",
+        "profile_image_url": "",
+        "broadcaster_type": "",
+        "stream_title": "",
+        "stream_game": "",
+        "is_live": False,
+        "viewer_count": 0,
+        "followers_total": 0,
+        "scopes": [],
+        "auto_connect": True,
+        "bot_commands_enabled": True,
     },
     "overlay": {
         "port": 8899,
@@ -125,11 +138,9 @@ class StorageManager:
             "badge": badge,
         }
         self.data.setdefault("events", []).insert(0, evt)
-        # Mantener últimos 250 eventos
         if len(self.data["events"]) > 250:
             self.data["events"] = self.data["events"][:250]
 
-        # Actualizar metas automáticamente
         ov = self.data.get("overlay", {})
         if event_type == "follow":
             ov["follower_goal_current"] = ov.get("follower_goal_current", 0) + 1
@@ -150,7 +161,6 @@ class StorageManager:
         points_spent = sum(int(e.get("amount", 0)) for e in events if e.get("type") == "channel_points")
         tts_count = sum(1 for e in events if e.get("tts_used"))
 
-        # Top usuarios activos
         user_counts: dict[str, int] = {}
         for e in events:
             u = e.get("username", "Anónimo")
