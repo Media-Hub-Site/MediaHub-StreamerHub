@@ -2,6 +2,7 @@ import os
 import sys
 from PyQt6.QtWidgets import QApplication
 from ui.main_window import StreamStudioWindow
+from ui.theme import global_qss
 
 
 def main():
@@ -11,6 +12,7 @@ def main():
             lang = arg.split("=", 1)[1].strip() or "es"
 
     app = QApplication(sys.argv)
+    app.setStyleSheet(global_qss())
     window = StreamStudioWindow(lang=lang)
     window.show()
     sys.exit(app.exec())
